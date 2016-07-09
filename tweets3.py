@@ -1,6 +1,6 @@
-import twitter, time, sys, os
+import twitter, time, sys
 from optparse import OptionParser
-from threading import Thread, Lock
+from threading import Thread, Lock, Condition
 import tornado.ioloop
 import tornado.web
 from analyze import *
@@ -11,6 +11,7 @@ tweetstore = []
 rtstore = []
 queue = [] 
 lock = Lock()
+condition = Condition()
 tcount = 0
 
 class tweettray(Thread):
@@ -22,10 +23,10 @@ class tweettray(Thread):
     l_list = []
     ulist = []
 
-    consumerkey = os.environ['CONSUMERKEY']
-    consumersecret = os.environ['CONSUMERSECRET']
-    accesstokenkey = os.environ['ACCESSTOKENKEY']
-    accesstokensecret = os.environ['ACCESSTOKENSECRET']
+    consumerkey = 'Your Consumer Key Goes Here'
+    consumersecret = 'Your Consumer Secret Goes Here'
+    accesstokenkey = 'Your Access Token Key Goes Here'
+    accesstokensecret = 'Your Access Token Secret Goes Here'
 
     def append(self, item):
         lock.acquire()
@@ -67,7 +68,7 @@ class tweettray(Thread):
     def getFriendIDs(self, username):
         print "Getting Friend IDs"
         self.ulist = self.api.GetFriendIDs(screen_name=username)
-        print "Processing Friends IDs"
+        print "Processing Friends IDs: %s" %(username)
         #print self.ulist
         count = 0
         for num in self.ulist:
@@ -89,9 +90,12 @@ class tweettray(Thread):
             print "No one to subscribe to"
             return 
 
-        for i in self.api.GetStreamFilter(follow=self.slist):    
+        for i in self.api.GetStreamFilter(follow=self.slist):
             if i.has_key('text'):
+                condition.acquire()
                 self.append(i)
+                condition.notify()
+                condition.release()
 
     def run(self):
         print "Starting producer thread"
@@ -138,12 +142,14 @@ class pTweets(Thread):
         global tweetstore
         global rtstore
         block = ["insafediver", "MakeUseOf", "healthyworld24", "ISSAboveYou", "JoeGumby1", "Gumbletech"]
-        blockterms = ["invest", "market", "nasa"]
+        blockterms = ["invest", "market", "nasa", "untuk"]
         prefuser = ["davewiner", "scobleizer"]
         while True:
-            lock.acquire()
+            #lock.acquire()
+            condition.acquire()
             if not queue:
                 #print "Nothing in queue: printer will try again"
+                condition.wait()
                 pass
             else:
                 num = queue.pop()
@@ -170,7 +176,7 @@ class pTweets(Thread):
                         if (blck) and not (a.cleanstr(text).isupper()):
 #                            print screen_name, text
                             tweetstore.append(num)
-            lock.release()
+            condition.release()
 
 class stats(tornado.web.RequestHandler):
     def get(self):
@@ -266,6 +272,7 @@ class GreenHandler(tornado.web.RequestHandler):
         <html>
         <head>
         <title>Green Tweets</Title>
+        <meta http-equiv="refresh" content="30" />
         </head>
         <body style="background:lightgray">
         """
@@ -307,6 +314,7 @@ class RedHandler(tornado.web.RequestHandler):
         <html>
         <head>
         <title>Red Tweets</Title>
+        <meta http-equiv="refresh" content="60" />
         </head>
         <body style="background:lightgray">
         """
@@ -388,38 +396,43 @@ def startwebserver(port):
     application.listen(port)
     tornado.ioloop.IOLoop.instance().start()
 
+def main():
+    parser = OptionParser()
+    parser.add_option("-u", "--username", dest="user", help=" a username is needed", default='awasim')
+    parser.add_option("-a", "--all", dest="all", help=" Subscribe to user and lists", action="store_true")
+    parser.add_option("-l", "--list", dest="list", help=" Subcribe only to user lists", action="store_true")
+    parser.add_option("-p", "--port", dest="port", help=" Port to run webserver on", default="8888")
+    global tweetstore
+    tweetstore = loadtwts()
+    tw = tweettray()
+    pT = pTweets()
+    pT2 = pTweets()
+    pT3 = pTweets()
+    (options, args) = parser.parse_args()
+    if (options.all): 
+        tw.subscribeUnL(options.user)
+    elif (options.list):
+        tw.subscribeL(options.user)
+    else:
+        tw.subscribeU(options.user)
+    tw.daemon = True
+    pT.daemon = True
+    pT2.daemon = True
+    pT3.daemon = True
+    tw.start()
+    pT.start()
+    pT2.start()
+    pT3.start()
+    if (options.port):
+        startwebserver(options.port)
+    else:
+        startwebserver(8888)
 
 if __name__ == "__main__":
     try:
-        parser = OptionParser()
-        parser.add_option("-u", "--username", dest="user", help=" a username is needed", default='awasim')
-        parser.add_option("-a", "--all", dest="all", help=" Subscribe to user and lists", action="store_true")
-        parser.add_option("-l", "--list", dest="list", help=" Subcribe only to user lists", action="store_true")
-        parser.add_option("-p", "--port", dest="port", help=" Port to run webserver on", default="8888")
-        tweetstore = loadtwts()
-        tw = tweettray()
-        pT = pTweets()
-#        pT2 = pTweets()
-#        pT3 = pTweets()
-        (options, args) = parser.parse_args()
-        if (options.all): 
-            tw.subscribeUnL(options.user)
-        elif (options.list):
-            tw.subscribeL(options.user)
-        else:
-            tw.subscribeU(options.user)
-        tw.daemon = True
-        pT.daemon = True
-#        pT2.daemon = True
-#        pT3.daemon = True
-        tw.start()
-        pT.start()
-#        pT2.start()
-#        pT3.start()
-        if (options.port):
-            startwebserver(options.port)
-        else:
-            startwebserver(8888)
+        import cProfile
+        #cProfile.run(main(), 'restats')
+        main()
     except KeyboardInterrupt:
         print "Key Pressed"
         dumptwts(tweetstore)
